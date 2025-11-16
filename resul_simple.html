@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نتیجه</title>
+    <style>
+        body {
+            font-family: Tahoma, sans-serif;
+            background: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+        }
+        .container {
+            max-width: 600px;
+            margin: 50px auto;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .success {
+            color: green;
+        }
+        .error {
+            color: red;
+        }
+        img {
+            max-width: 100%;
+            border-radius: 10px;
+            margin: 20px 0;
+            border: 2px solid #ddd;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 10px;
+            border: none;
+            cursor: pointer;
+        }
+        .btn-secondary {
+            background: #2196F3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        {% if success %}
+            <h1 class="success">✅ عکس تولید شد!</h1>
+            <p><strong>متن شما:</strong> "{{ text }}"</p>
+            
+            <div class="image-container">
+                <img src="{{ image_data }}" alt="عکس تولید شده" 
+                     onerror="this.style.display='none'; document.getElementById('error-msg').style.display='block';">
+                <div id="error-msg" style="display: none; color: red;">
+                    ❌ عکس نمایش داده نشد. ممکن است مشکل از اینترنت باشد.
+                </div>
+            </div>
+            
+            <div>
+                <form action="/download" method="POST" style="display: inline;">
+                    <input type="hidden" name="image_data" value="{{ image_data }}">
+                    <button type="submit" class="btn">💾 دانلود عکس</button>
+                </form>
+                
+                <a href="/" class="btn btn-secondary">🔄 تولید عکس جدید</a>
+            </div>
+            
+        {% else %}
+            <h1 class="error">❌ خطا</h1>
+            <p>{{ error }}</p>
+            <a href="/" class="btn btn-secondary">بازگشت به صفحه اصلی</a>
+        {% endif %}
+    </div>
+    
+    <script>
+        // تست کن ببین عکس لود شده یا نه
+        window.addEventListener('load', function() {
+            var img = document.querySelector('img');
+            if (img) {
+                console.log('🖼 عکس لود شد');
+            } else {
+                console.log('❌ عکس لود نشد');
+            }
+        });
+    </script>
+</body>
+</html>

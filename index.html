@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>سازنده عکس هوش مصنوعی</title>
+    <style>
+        body {
+            font-family: Tahoma, sans-serif;
+            background: #f0f0f0;
+            margin: 0;
+            padding: 50px;
+            text-align: center;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            margin: 10px 0;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-family: Tahoma;
+        }
+        button {
+            padding: 12px 30px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 سازنده عکس هوش مصنوعی</h1>
+        <p>متن خود را وارد کنید و عکس تولید کنید!</p>
+        
+        <form action="/generate" method="POST">
+            <textarea name="text" placeholder="مثال: یک گربه سفید، منظره کوهستان، شهر در شب..." required></textarea>
+            <br>
+            <button type="submit">🚀 تولید عکس</button>
+        </form>
+        
+        <div style="margin-top: 20px; color: #666;">
+            <p>ایده‌های نمونه:</p>
+            <p>"یک گربه سفید" | "منظره کوهستان" | "شهر آینده نگر"</p>
+        </div>
+    </div>
+</body>
+</html>
