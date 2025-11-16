@@ -10,7 +10,7 @@ app = Flask(__name__)
 app.secret_key = 'ai-image-generator-secret-key-2024'  # برای sessionها
 
 # کلید API - اینجا قرار بده
-HF_API_TOKEN = "hk_your_token_here"  # جایگزین کن با توکن واقعی
+HF_API_TOKEN = "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"  # جایگزین کن با توکن واقعی
 HF_API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
 
 # عکس‌های نمونه برای وقتی که API کار نمی‌کند
