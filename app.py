@@ -1,14 +1,16 @@
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, session, redirect, url_for
 import requests
 import base64
 import os
 import json
+import hashlib
 from datetime import datetime
 
 app = Flask(__name__)
+app.secret_key = 'ai-image-generator-secret-key-2024'  # برای sessionها
 
 # کلید API - اینجا قرار بده
-HF_API_TOKEN = "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"  # جایگزین کن با توکن واقعی
+HF_API_TOKEN = "hk_your_token_here"  # جایگزین کن با توکن واقعی
 HF_API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
 
 # عکس‌های نمونه برای وقتی که API کار نمی‌کند
@@ -21,13 +23,139 @@ SAMPLE_IMAGES = {
     'غذا': "https://cdn.pixabay.com/photo/2017/01/26/02/06/platter-2009590_1280.jpg"
 }
 
+class UserManager:
+    def init(self):
+        self.users_file = "users.json"
+        self.images_file = "user_images.json"
+        self.load_data()
+    
+    def load_data(self):
+        """بارگذاری داده‌ها از فایل"""
+        if not os.path.exists(self.users_file):
+            self.users = {}
+            self.save_users()
+        else:
+            try:
+                with open(self.users_file, 'r', encoding='utf-8') as f:
+                    self.users = json.load(f)
+            except:
+                self.users = {}
+        
+        if not os.path.exists(self.images_file):
+            self.user_images = {}
+            self.save_images()
+        else:
+            try:
+                with open(self.images_file, 'r', encoding='utf-8') as f:
+                    self.user_images = json.load(f)
+            except:
+                self.user_images = {}
+    
+    def save_users(self):
+        """ذخیره کاربران"""
+        try:
+            with open(self.users_file, 'w', encoding='utf-8') as f:
+                json.dump(self.users, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+    
+    def save_images(self):
+        """ذخیره عکس‌های کاربران"""
+        try:
+            with open(self.images_file, 'w', encoding='utf-8') as f:
+                json.dump(self.user_images, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+    
+    def hash_password(self, password):
+        """هش کردن رمز عبور"""
+        return hashlib.sha256(password.encode()).hexdigest()
+    
+    def register(self, email, password, name):
+        """ثبت نام کاربر جدید"""
+        if email in self.users:
+            return False, "این ایمیل قبلاً ثبت شده است"
+        
+        self.users[email] = {
+            'password': self.hash_password(password),
+            'name': name,
+            'created_at': datetime.now().isoformat(),
+            'plan': 'free',
+            'images_today': 0,
+            'last_reset': datetime.now().date().isoformat()
+        }
+        self.save_users()
+        return True, "ثبت نام موفقیت‌آمیز بود"
+    
+    def login(self, email, password):
+        """ورود کاربر"""
+        if email not in self.users:
+            return False, "کاربری با این ایمیل یافت نشد"
+        
+        if self.users[email]['password'] != self.hash_password(password):
+            return False, "رمز عبور اشتباه است"
+        
+        # بررسی reset روزانه
+        self.reset_daily_limit(email)
+        return True, "ورود موفقیت‌آمیز بود"
+    
+    def reset_daily_limit(self, email):
+        """بازنشانی محدودیت روزانه"""
+        today = datetime.now().date().isoformat()
+        if self.users[email]['last_reset'] != today:
+            self.users[email]['images_today'] = 0
+            self.users[email]['last_reset'] = today
+            self.save_users()
+    
+    def can_generate_image(self, email):
+        """آیا کاربر می‌تواند عکس تولید کند؟"""
+        if email not in self.users:
+            return False, "لطفاً اول وارد شوید"
+        
+        if self.users[email]['plan'] == 'premium':
+            return True, ""
+        self.reset_daily_limit(email)
+        if self.users[email]['images_today'] < 5:  # 5 عکس رایگان در روز
+            return True, ""
+        else:
+            return False, "محدودیت روزانه! شما ۵ عکس رایگان امروز را استفاده کرده‌اید. فردا دوباره امتحان کنید."
+    
+    def record_image_generation(self, email, prompt, image_url):
+        """ثبت تولید عکس جدید"""
+        self.reset_daily_limit(email)
+        self.users[email]['images_today'] += 1
+        
+        if email not in self.user_images:
+            self.user_images[email] = []
+        
+        self.user_images[email].append({
+            'prompt': prompt,
+            'image_url': image_url,
+            'created_at': datetime.now().isoformat()
+        })
+        
+        # فقط ۵۰ عکس آخر رو نگه دار
+        if len(self.user_images[email]) > 50:
+            self.user_images[email] = self.user_images[email][-50:]
+        
+        self.save_users()
+        self.save_images()
+    
+    def get_user_images(self, email):
+        """دریافت تاریخچه عکس‌های کاربر"""
+        return self.user_images.get(email, [])
+
+# Initialize user manager
+user_manager = UserManager()
+
 def translate_to_english(text):
     """ترجمه ساده فارسی به انگلیسی"""
     dictionary = {
         'گربه': 'cat', 'سگ': 'dog', 'طبیعت': 'nature', 'شهر': 'city',
         'دریا': 'sea', 'کوه': 'mountain', 'جنگل': 'forest', 'گل': 'flower',
         'ستاره': 'star', 'ماه': 'moon', 'خورشید': 'sun', 'درخت': 'tree',
-        'فضا': 'space', 'سیاره': 'planet', 'غذا': 'food', 'پیتزا': 'pizza'
+        'فضا': 'space', 'سیاره': 'planet', 'غذا': 'food', 'پیتزا': 'pizza',
+        'ماشین': 'car', 'خانه': 'house', 'باغ': 'garden', 'رودخانه': 'river'
     }
     
     for persian, english in dictionary.items():
@@ -98,12 +226,354 @@ def get_smart_image(text, style):
                 return url, "sample"
         return SAMPLE_IMAGES['طبیعت'], "sample"
 
+# HTML Templates
 HTML_HOME = '''
 <html dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>سازنده عکس هوش مصنوعی واقعی</title>
+    <title>سازنده عکس هوش مصنوعی</title>
+    <style>
+        body { 
+            font-family: Tahoma, sans-serif; 
+            text-align: center; 
+            padding: 20px;background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            margin: 0;
+            min-height: 100vh;
+            color: white;
+        }
+        .container { 
+            background: rgba(255,255,255,0.95); 
+            padding: 40px; 
+            border-radius: 20px; 
+            display: inline-block;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            max-width: 500px;
+            margin: 30px auto;
+            color: #333;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .btn { 
+            padding: 15px 30px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; 
+            text-decoration: none; 
+            margin: 10px; 
+            display: inline-block;
+            border-radius: 10px;
+            transition: transform 0.2s;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .btn-secondary {
+            background: linear-gradient(135deg, #00b09b, #96c93d);
+        }
+        .features {
+            margin-top: 25px;
+            text-align: right;
+            color: #666;
+        }
+        .features li {
+            margin: 8px 0;
+            list-style-type: none;
+        }
+        .features li:before {
+            content: "✅ ";
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 سازنده عکس هوش مصنوعی</h1>
+        <p style="color: #666; margin-bottom: 25px;">برای استفاده از برنامه، لطفاً وارد شوید یا ثبت نام کنید</p>
+        
+        <div>
+            <a href="/login" class="btn">🔐 ورود به حساب</a>
+            <a href="/register" class="btn btn-secondary">📝 ثبت نام جدید</a>
+        </div>
+        
+        <div class="features">
+            <h3>✨ ویژگی‌های برنامه:</h3>
+            <ul>
+                <li>تولید عکس با هوش مصنوعی</li>
+                <li>سیستم کاربران پیشرفته</li>
+                <li>تاریخچه عکس‌های تولید شده</li>
+                <li>۵ عکس رایگان در روز</li>
+                <li>پنل کاربری شخصی</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
+'''
+
+HTML_LOGIN = '''
+<html dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ورود به حساب</title>
+    <style>
+        body { 
+            font-family: Tahoma, sans-serif; 
+            text-align: center; 
+            padding: 20px; 
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            margin: 0;
+            min-height: 100vh;
+        }
+        .container { 
+            background: rgba(255,255,255,0.95); 
+            padding: 40px; 
+            border-radius: 20px; 
+            display: inline-block;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            max-width: 400px;
+            margin: 30px auto;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        .link {
+            color: #667eea;
+            text-decoration: none;
+            margin: 10px 0;
+            display: block;
+        }</style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 ورود به حساب</h1>
+        <form method="POST">
+            <input type="email" name="email" placeholder="ایمیل" required>
+            <input type="password" name="password" placeholder="رمز عبور" required>
+            <button type="submit">ورود به حساب</button>
+        </form>
+        <a href="/register" class="link">حساب کاربری ندارید؟ ثبت نام کنید</a>
+        <a href="/" class="link">بازگشت به صفحه اصلی</a>
+    </div>
+</body>
+</html>
+'''
+
+HTML_REGISTER = '''
+<html dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ثبت نام جدید</title>
+    <style>
+        body { 
+            font-family: Tahoma, sans-serif; 
+            text-align: center; 
+            padding: 20px; 
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            margin: 0;
+            min-height: 100vh;
+        }
+        .container { 
+            background: rgba(255,255,255,0.95); 
+            padding: 40px; 
+            border-radius: 20px; 
+            display: inline-block;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            max-width: 400px;
+            margin: 30px auto;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #00b09b, #96c93d);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        .link {
+            color: #667eea;
+            text-decoration: none;
+            margin: 10px 0;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📝 ثبت نام جدید</h1>
+        <form method="POST">
+            <input type="text" name="name" placeholder="نام کامل" required>
+            <input type="email" name="email" placeholder="ایمیل" required>
+            <input type="password" name="password" placeholder="رمز عبور" required>
+            <button type="submit">ثبت نام</button>
+        </form>
+        <a href="/login" class="link">قبلاً حساب دارید؟ وارد شوید</a>
+        <a href="/" class="link">بازگشت به صفحه اصلی</a>
+    </div>
+</body>
+</html>
+'''
+
+HTML_DASHBOARD = '''
+<html dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>پنل کاربری</title>
+    <style>
+        body { 
+            font-family: Tahoma, sans-serif; 
+            padding: 20px; 
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            margin: 0;
+            min-height: 100vh;
+            color: white;
+        }
+        .container { 
+            background: rgba(255,255,255,0.95); 
+            padding: 30px; 
+            border-radius: 15px; 
+            max-width: 800px;
+            margin: 20px auto;
+            color: #333;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .stats {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            text-align: center;
+        }
+        .btn { 
+            padding: 12px 25px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; 
+            text-decoration: none; 
+            margin: 5px; 
+            display: inline-block;
+            border-radius: 8px;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }.btn-success {
+            background: linear-gradient(135deg, #00b09b, #96c93d);
+        }
+        .btn-danger {
+            background: linear-gradient(135deg, #FF6B6B, #FF8E53);
+        }
+        .history-item {
+            background: #f8f9fa;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-right: 4px solid #667eea;
+        }
+        .limit-warning {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border: 1px solid #ffeaa7;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 style="margin: 0;">👋 خوش آمدید، {{ user_name }}</h1>
+            <p style="margin: 10px 0 0 0;">{{ user_email }}</p>
+        </div>
+
+        <div class="stats">
+            <h3>📊 آمار امروز</h3>
+            <p>تعداد عکس‌های تولید شده: <strong>{{ images_today }}/5</strong></p>
+            {% if can_generate %}
+                <p style="color: green;">✅ می‌توانید عکس جدید تولید کنید</p>
+            {% else %}
+                <div class="limit-warning">
+                    ❌ {{ limit_message }}
+                </div>
+            {% endif %}
+        </div>
+
+        <div style="text-align: center; margin: 20px 0;">
+            {% if can_generate %}
+                <a href="/generate" class="btn btn-success">🎨 تولید عکس جدید</a>
+            {% else %}
+                <a href="/generate" class="btn" style="background: #ccc; cursor: not-allowed;">🎨 تولید عکس جدید</a>
+            {% endif %}
+            <a href="/logout" class="btn btn-danger">🚪 خروج</a>
+        </div>
+
+        <div>
+            <h3>📷 تاریخچه عکس‌های شما</h3>
+            {% if user_images %}
+                {% for img in user_images %}
+                <div class="history-item">
+                    <p style="margin: 0 0 5px 0;"><strong>{{ img.prompt }}</strong></p>
+                    <p style="margin: 0; color: #666; font-size: 14px;">{{ img.created_at[:16] }}</p>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p style="text-align: center; color: #666;">هنوز هیچ عکسی تولید نکرده‌اید</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
+'''
+
+HTML_GENERATE = '''
+<html dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تولید عکس جدید</title>
     <style>
         body { 
             font-family: Tahoma, sans-serif; 
@@ -117,7 +587,8 @@ HTML_HOME = '''
         .container { 
             background: rgba(255,255,255,0.95); 
             padding: 40px; 
-            border-radius: 20px;display: inline-block;
+            border-radius: 20px; 
+            display: inline-block;
             box-shadow: 0 20px 40px rgba(0,0,0,0.3);
             max-width: 500px;
             margin: 30px auto;
@@ -157,8 +628,7 @@ HTML_HOME = '''
             font-size: 16px;
         }
         button { 
-            padding: 15px 30px; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 15px 30px;background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white; 
             border: none; 
             cursor: pointer; 
@@ -180,19 +650,6 @@ HTML_HOME = '''
             margin: 20px 0;
             color: #667eea;
         }
-        .features {
-            margin-top: 25px;
-            text-align: right;
-            color: #666;
-        }
-        .features li {
-            margin: 8px 0;
-            list-style-type: none;
-        }
-        .features li:before {
-            content: "✅ ";
-            margin-left: 10px;
-        }
         .example-tag {
             background: #e9ecef;
             padding: 8px 15px;
@@ -206,13 +663,21 @@ HTML_HOME = '''
             background: #667eea;
             color: white;
         }
+        .btn-back {
+            padding: 10px 20px;
+            background: #6c757d;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            display: inline-block;
+            margin: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🚀 سازنده عکس هوش مصنوعی واقعی</h1>
-        <div class="ai-badge">Powered by Stable Diffusion AI</div>
-        <p style="color: #666; margin-bottom: 25px;">متن خود را وارد کنید و با هوش مصنوعی عکس واقعی تولید کنید!</p>
+        <h1>🎨 تولید عکس جدید</h1>
+        <div class="ai-badge">۵ عکس رایگان در روز</div>
         
         <form action="/generate" method="POST" onsubmit="showLoading()">
             <textarea name="text" placeholder="بنویسید: یک گربه سفید در جنگل جادویی، منظره کوهستان با برف، شهر آینده نگر در شب..." required></textarea>
@@ -233,7 +698,9 @@ HTML_HOME = '''
             <div style="font-size: 24px; margin-bottom: 10px;">⏳</div>
             <p>در حال تولید عکس با هوش مصنوعی...</p>
             <p style="font-size: 14px; color: #999;">لطفاً ۲۰-۳۰ ثانیه صبر کنید</p>
-        </div><div style="margin-top: 20px; color: #666;">
+        </div>
+        
+        <div style="margin-top: 20px; color: #666;">
             <p>ایده‌های سریع:</p>
             <div>
                 <span class="example-tag" onclick="setExample('یک گربه سفید در جنگل')">🐱 گربه در جنگل</span>
@@ -242,15 +709,7 @@ HTML_HOME = '''
             </div>
         </div>
         
-        <div class="features">
-            <h3>✨ ویژگی‌ها:</h3>
-            <ul>
-                <li>تولید عکس واقعی با هوش مصنوعی</li>
-                <li>پشتیبانی از سبک‌های مختلف</li>
-                <li>ترجمه خودکار فارسی به انگلیسی</li>
-                <li>طراحی پیشرفته و ریسپانسیو</li>
-            </ul>
-        </div>
+        <a href="/dashboard" class="btn-back">← بازگشت به پنل کاربری</a>
     </div>
 
     <script>
@@ -261,8 +720,6 @@ HTML_HOME = '''
         function setExample(text) {
             document.querySelector('textarea').value = text;
         }
-        
-        console.log("🚀 سازنده عکس هوش مصنوعی آماده است!");
     </script>
 </body>
 </html>
@@ -273,7 +730,7 @@ HTML_RESULT = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>عکس تولید شده با هوش مصنوعی</title>
+    <title>عکس تولید شده</title>
     <style>
         body { 
             font-family: Tahoma, sans-serif; 
@@ -293,8 +750,7 @@ HTML_RESULT = '''
             max-width: 700px;
             margin: 30px auto;
             color: #333;
-        }
-        .success-header {
+        }.success-header {
             background: linear-gradient(135deg, #00b09b, #96c93d);
             color: white;
             padding: 25px;
@@ -362,12 +818,13 @@ HTML_RESULT = '''
             margin: 20px 0;
             font-size: 14px;
             color: #666;
-        }</style>
+        }
+    </style>
 </head>
 <body>
     <div class="container">
         <div class="success-header">
-            <h1 style="margin: 0; font-size: 28px;">🎉 عکس هوش مصنوعی تولید شد!</h1>
+            <h1 style="margin: 0; font-size: 28px;">🎉 عکس تولید شد!</h1>
             {% if image_type == "ai" %}
                 <div class="ai-powered">تولید شده با Stable Diffusion AI</div>
             {% else %}
@@ -385,7 +842,6 @@ HTML_RESULT = '''
         <div class="sample-notice">
             <h3>💡 توجه:</h3>
             <p>این یک عکس نمونه است. برای استفاده از هوش مصنوعی واقعی، نیاز به API Key داریم.</p>
-            <p>می‌توانید از Hugging Face token رایگان استفاده کنید.</p>
         </div>
         {% endif %}
         
@@ -407,51 +863,167 @@ HTML_RESULT = '''
         </div>
         
         <div>
-            <a href="/" class="btn">🔄 تولید عکس جدید</a>
+            <a href="/generate" class="btn">🔄 تولید عکس جدید</a>
+            <a href="/dashboard" class="btn" style="background: linear-gradient(135deg, #00b09b, #96c93d);">📊 پنل کاربری</a>
         </div>
     </div>
 </body>
 </html>
 '''
 
+# Routes
 @app.route('/')
 def home():
+    if 'user' in session:
+        return redirect('/dashboard')
     return HTML_HOME
 
-@app.route('/generate', methods=['POST'])
-def generate_image():
-    try:
-        text = request.form['text']
-        style = request.form.get('style', 'realistic')
-        
-        print(f"🎨 دریافت درخواست: {text}")
-        print(f"🎭 سبک: {style}")
-        
-        # تولید عکس
-        image_url, image_type = get_smart_image(text, style)
-        
-        return render_template_string(
-            HTML_RESULT, 
-            text=text, 
-            style=style,
-            image_url=image_url,
-            image_type=image_type,
-            time=datetime.now().strftime("%H:%M:%S")
-        )
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if 'user' in session:
+        return redirect('/dashboard')
     
-    except Exception as e:
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        name = request.form['name']
+        
+        success, message = user_manager.register(email, password, name)
+        if success:
+            session['user'] = email
+            return redirect('/dashboard')
+        else:
+            return f'''
+            <html dir="rtl">
+            <head><meta charset="UTF-8"><title>خطا</title></head>
+            <body style="font-family: Tahoma; text-align: center; padding: 50px;">
+                <h1 style="color: red;">❌ خطا در ثبت نام</h1>
+                <p>{message}</p>
+                <a href="/register" style="padding: 10px 20px; background: blue; color: white; text-decoration: none;">
+                    بازگشت
+                </a>
+            </body>
+            </html>
+            '''
+    
+    return HTML_REGISTER
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if 'user' in session:
+        return redirect('/dashboard')
+    
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        
+        success, message = user_manager.login(email, password)
+        if success:
+            session['user'] = email
+            return redirect('/dashboard')
+        else:
+            return f'''
+            <html dir="rtl">
+            <head><meta charset="UTF-8"><title>خطا</title></head>
+            <body style="font-family: Tahoma; text-align: center; padding: 50px;">
+                <h1 style="color: red;">❌ خطا در ورود</h1>
+                <p>{message}</p>
+                <a href="/login" style="padding: 10px 20px; background: blue; color: white; text-decoration: none;">
+                    بازگشت
+                </a>
+            </body>
+            </html>
+            '''
+    
+    return HTML_LOGIN
+
+@app.route('/dashboard')
+def dashboard():
+    if 'user' not in session:
+        return redirect('/login')
+    
+    user_email = session['user']
+    user_data = user_manager.users[user_email]
+    user_images = user_manager.get_user_images(user_email)
+    can_generate, limit_message = user_manager.can_generate_image(user_email)
+    
+    # معکوس کردن لیست برای نمایش جدیدترین عکس‌ها اول
+    user_images.reverse()
+    
+    return render_template_string(
+        HTML_DASHBOARD,
+        user_name=user_data['name'],
+        user_email=user_email,
+        images_today=user_data['images_today'],
+        can_generate=can_generate,
+        limit_message=limit_message,
+        user_images=user_images[:10]  # فقط ۱۰ عکس آخر
+    )
+
+@app.route('/generate', methods=['GET', 'POST'])
+def generate_image():
+    if 'user' not in session:
+        return redirect('/login')
+    
+    user_email = session['user']
+    
+    # بررسی محدودیت
+    can_generate, message = user_manager.can_generate_image(user_email)
+    if request.method == 'GET' and not can_generate:
         return f'''
         <html dir="rtl">
-        <head><meta charset="UTF-8"><title>خطا</title></head>
+        <head><meta charset="UTF-8"><title>محدودیت</title></head>
         <body style="font-family: Tahoma; text-align: center; padding: 50px;">
-            <h1 style="color: red;">❌ خطا در تولید عکس</h1>
-            <p>{str(e)}</p>
-            <a href="/" style="padding: 10px 20px; background: blue; color: white; text-decoration: none;">
-                بازگشت به صفحه اصلی
+            <h1 style="color: orange;">⚠️ محدودیت روزانه</h1>
+            <p>{message}</p>
+            <a href="/dashboard" style="padding: 10px 20px; background: blue; color: white; text-decoration: none;">
+                بازگشت به پنل کاربری
             </a>
         </body>
         </html>
         '''
+    
+    if request.method == 'POST':
+        try:
+            text = request.form['text']
+            style = request.form.get('style', 'realistic')
+            
+            print(f"🎨 دریافت درخواست از {user_email}: {text}")
+            
+            # تولید عکس
+            image_url, image_type = get_smart_image(text, style)
+            
+            # ثبت در تاریخچه کاربر
+            user_manager.record_image_generation(user_email, text, image_url)
+            
+            return render_template_string(
+                HTML_RESULT, 
+                text=text, 
+                style=style,
+                image_url=image_url,
+                image_type=image_type,
+                time=datetime.now().strftime("%H:%M:%S")
+            )
+        except Exception as e:
+            return f'''
+            <html dir="rtl">
+            <head><meta charset="UTF-8"><title>خطا</title></head>
+            <body style="font-family: Tahoma; text-align: center; padding: 50px;">
+                <h1 style="color: red;">❌ خطا در تولید عکس</h1>
+                <p>{str(e)}</p>
+                <a href="/generate" style="padding: 10px 20px; background: blue; color: white; text-decoration: none;">
+                    تلاش مجدد
+                </a>
+            </body>
+            </html>
+            '''
+    
+    return HTML_GENERATE
+
+@app.route('logout')
+def logout():
+    session.pop('usre' , None)
+    return redirect('/')
 
 if __name__ == '__main__':
     app.run(debug=False)
